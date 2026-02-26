@@ -1,7 +1,9 @@
 const axios = require("axios");
 const driver = require("../db/neo4j");
 
-const TOMTOM_API_KEY = "YOUR_TOMTOM_API_KEY";
+// load API key from environment (dotenv should be initialized by caller)
+const TOMTOM_API_KEY = process.env.TOMTOM_API_KEY; // fallback for legacy/development
+
 
 function calculateTrafficLevel(freeFlowSpeed, currentSpeed) {
   const ratio = currentSpeed / freeFlowSpeed;
@@ -55,7 +57,8 @@ exports.updateTrafficForAttraction = async (cityName, lat, lon) => {
 
     console.log(`Traffic updated for ${cityName}`);
   } catch (error) {
-    console.error("TomTom Traffic error:", error.response?.data || error.message);
+    // include the coordinates we attempted so it's easier to debug
+    console.error("TomTom Traffic error for point", lat, lon, ":", error.response?.data || error.message);
   } finally {
     await session.close();
   }
