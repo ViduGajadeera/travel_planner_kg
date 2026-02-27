@@ -13,13 +13,8 @@ if (!HERE_API_KEY) {
  * @param {number|string} originLon
  * @param {number|string} destLat
  * @param {number|string} destLon
+ * @returns {Object} - Traffic info including distance, duration, delay, and status
  */
-
-function getPeakTimeISO(hour = 8) {
-  const now = new Date();
-  now.setHours(hour, 0, 0, 0);
-  return now.toISOString();
-}
 async function getTrafficInfo(originLat, originLon, destLat, destLon) {
   try {
     const response = await axios.get(
@@ -32,7 +27,7 @@ async function getTrafficInfo(originLat, originLon, destLat, destLon) {
           routingMode: "fast",
           return: "summary,travelSummary",
           traffic: "enabled",
-          departureTime: "any", // ← use real-time instead of simulated
+          departureTime: "any", // use real-time traffic
           apiKey: HERE_API_KEY,
         },
       }
@@ -44,24 +39,30 @@ async function getTrafficInfo(originLat, originLon, destLat, destLon) {
 
     const summary = response.data.routes[0].sections[0].summary;
 
-    const baseDuration = summary.baseDuration; // without traffic
-    const trafficDuration = summary.duration;  // with traffic
+    const baseDuration = summary.baseDuration;       // seconds without traffic
+    const trafficDuration = summary.duration;        // seconds with traffic
     const hasTraffic = trafficDuration > baseDuration;
 
     return {
-  distanceKm: (summary.length / 1000).toFixed(2),
-  baseDurationMinutes: (baseDuration / 60).toFixed(2),
-  trafficDurationMinutes: (trafficDuration / 60).toFixed(2),
-  trafficDelayMinutes: ((trafficDuration - baseDuration) / 60).toFixed(2),
-  trafficStatus: hasTraffic ? "Congested" : "Normal Flow"
-};
+      distanceKm: (summary.length / 1000).toFixed(2),
+      baseDurationMinutes: (baseDuration / 60).toFixed(2),
+      trafficDurationMinutes: (trafficDuration / 60).toFixed(2),
+      trafficDelayMinutes: ((trafficDuration - baseDuration) / 60).toFixed(2),
+      trafficStatus: hasTraffic ? "Congested" : "Normal Flow"
+    };
 
   } catch (error) {
     console.error(
       "HERE Routing Error:",
       error.response?.data || error.message
     );
-    throw error;
+    return {
+      distanceKm: null,
+      baseDurationMinutes: null,
+      trafficDurationMinutes: null,
+      trafficDelayMinutes: null,
+      trafficStatus: "Unknown"
+    };
   }
 }
 

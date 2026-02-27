@@ -6,14 +6,14 @@ async function syncCategoriesFromKG() {
   try {
     const result = await session.run(
       `
-      // 1️⃣ Get all unique LocationTypes linked to Attractions
+      // Get all unique LocationTypes linked to Attractions
       MATCH (a:Attraction)-[:BELONGS_TO_TYPE]->(t:LocationType)
       WITH DISTINCT t.name AS typeName
 
-      // 2️⃣ Create Category nodes if not already present
+      //  Create Category nodes if not already present
       MERGE (c:Category {name: typeName})
 
-      // 3️⃣ Return all created/updated categories
+      // Return all created/updated categories
       RETURN c.name AS category
       ORDER BY category
       `
