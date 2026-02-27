@@ -56,7 +56,7 @@ const importLocations = async () => {
           console.log(`Inserted batch ${i / BATCH_SIZE + 1}`);
         }
 
-        console.log("✅ Location import completed successfully");
+        console.log(" Location import completed successfully");
       } catch (error) {
         console.error("Import Error:", error);
       } finally {

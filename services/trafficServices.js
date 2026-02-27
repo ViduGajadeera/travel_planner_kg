@@ -1,65 +1,68 @@
+require("dotenv").config();
 const axios = require("axios");
-const driver = require("../db/neo4j");
 
-// load API key from environment (dotenv should be initialized by caller)
-const TOMTOM_API_KEY = process.env.TOMTOM_API_KEY; // fallback for legacy/development
+const HERE_API_KEY = process.env.HERE_API_KEY;
 
-
-function calculateTrafficLevel(freeFlowSpeed, currentSpeed) {
-  const ratio = currentSpeed / freeFlowSpeed;
-
-  if (ratio > 0.8) return "Low";
-  if (ratio > 0.5) return "Medium";
-  return "High";
+if (!HERE_API_KEY) {
+  throw new Error("HERE_API_KEY missing in .env");
 }
 
-exports.updateTrafficForAttraction = async (cityName, lat, lon) => {
-  const session = driver.session();
+/**
+ * Get real-time traffic-aware route information
+ * @param {number|string} originLat
+ * @param {number|string} originLon
+ * @param {number|string} destLat
+ * @param {number|string} destLon
+ */
 
+function getPeakTimeISO(hour = 8) {
+  const now = new Date();
+  now.setHours(hour, 0, 0, 0);
+  return now.toISOString();
+}
+async function getTrafficInfo(originLat, originLon, destLat, destLon) {
   try {
     const response = await axios.get(
-      `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json`,
+      "https://router.hereapi.com/v8/routes",
       {
         params: {
-          point: `${lat},${lon}`,
-          key: TOMTOM_API_KEY
-        }
+          transportMode: "car",
+          origin: `${originLat},${originLon}`,
+          destination: `${destLat},${destLon}`,
+          routingMode: "fast",
+          return: "summary,travelSummary",
+          traffic: "enabled",
+          departureTime: "any", // ← use real-time instead of simulated
+          apiKey: HERE_API_KEY,
+        },
       }
     );
 
-    const data = response.data.flowSegmentData;
+    if (!response.data.routes || response.data.routes.length === 0) {
+      throw new Error("No route found");
+    }
 
-    const currentSpeed = data.currentSpeed;
-    const freeFlowSpeed = data.freeFlowSpeed;
+    const summary = response.data.routes[0].sections[0].summary;
 
-    const trafficLevel = calculateTrafficLevel(
-      freeFlowSpeed,
-      currentSpeed
-    );
+    const baseDuration = summary.baseDuration; // without traffic
+    const trafficDuration = summary.duration;  // with traffic
+    const hasTraffic = trafficDuration > baseDuration;
 
-    await session.run(
-      `
-      MERGE (c:City {name: $cityName})
-      MERGE (t:Traffic {city: $cityName})
-      SET t.level = $trafficLevel,
-          t.currentSpeed = $currentSpeed,
-          t.freeFlowSpeed = $freeFlowSpeed,
-          t.updatedAt = datetime()
-      MERGE (c)-[:HAS_TRAFFIC]->(t)
-      `,
-      {
-        cityName,
-        trafficLevel,
-        currentSpeed,
-        freeFlowSpeed
-      }
-    );
-
-    console.log(`Traffic updated for ${cityName}`);
-  } catch (error) {
-    // include the coordinates we attempted so it's easier to debug
-    console.error("TomTom Traffic error for point", lat, lon, ":", error.response?.data || error.message);
-  } finally {
-    await session.close();
-  }
+    return {
+  distanceKm: (summary.length / 1000).toFixed(2),
+  baseDurationMinutes: (baseDuration / 60).toFixed(2),
+  trafficDurationMinutes: (trafficDuration / 60).toFixed(2),
+  trafficDelayMinutes: ((trafficDuration - baseDuration) / 60).toFixed(2),
+  trafficStatus: hasTraffic ? "Congested" : "Normal Flow"
 };
+
+  } catch (error) {
+    console.error(
+      "HERE Routing Error:",
+      error.response?.data || error.message
+    );
+    throw error;
+  }
+}
+
+module.exports = { getTrafficInfo };
