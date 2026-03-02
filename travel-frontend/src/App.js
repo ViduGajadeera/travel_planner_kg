@@ -1,77 +1,53 @@
-import { useState } from "react";
-import axios from "axios";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import { ThemeProvider, CssBaseline } from "@mui/material";
+import darkTheme from "./theme";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+
+import Dashboard from "./pages/Dashboard";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
+import RecommendationsPage from "./pages/RecommendationsPage";
+import VisitHistoryPage from "./pages/VisitHistoryPage";
+import Navbar from "./components/Navbar";
+
+function PrivateRoute({ children }) {
+  const { user, loading } = useAuth();
+  
+  if (loading) {
+    return <div>Loading...</div>;
+  }
+  
+  return user ? children : <Navigate to="/login" />;
+}
+
+function RootRoute() {
+  const { user, loading } = useAuth();
+  
+  if (loading) {
+    return <div>Loading...</div>;
+  }
+  
+  return user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />;
+}
 
 function App() {
-  const [recommendations, setRecommendations] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const userId = "u001";
-
-  const getLocationAndRecommend = () => {
-    if (!navigator.geolocation) {
-      alert("Geolocation not supported");
-      return;
-    }
-
-    setLoading(true);
-
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const latitude = position.coords.latitude;
-        const longitude = position.coords.longitude;
-
-        try {
-          const res = await axios.post(
-            `http://localhost:5000/api/recommend/${userId}`,
-            { latitude, longitude }
-          );
-
-          setRecommendations(res.data.recommendations);
-        } catch (error) {
-          console.error(error);
-          alert("Failed to fetch recommendations");
-        }
-
-        setLoading(false);
-      },
-      () => {
-        alert("Please allow location access");
-        setLoading(false);
-      }
-    );
-  };
-
   return (
-    <div style={{ padding: "40px", fontFamily: "Arial" }}>
-      <h1>🌍 AI Travel Recommendation System</h1>
-
-      <button onClick={getLocationAndRecommend}>
-        Get Smart Recommendations
-      </button>
-
-      {loading && <p>Finding best places near you...</p>}
-
-      <div style={{ marginTop: "30px" }}>
-        {recommendations.map((place, index) => (
-          <div
-  key={index}
-  style={{
-    border: "1px solid #ddd",
-    padding: "15px",
-    marginBottom: "15px",
-    borderRadius: "8px",
-  }}>
-    <h3>{place.attraction}</h3>
-    <p>Category: {place.category}</p>
-    <p>Distance: {place.traffic?.distanceKm || place.distanceKm} km</p>
-    <p>Weather: {place.weather}</p>
-    <p>
-     Traffic Status: {place.traffic?.trafficStatus || "Unknown"} <br />
-     Traffic Delay: {place.traffic?.trafficDelayMinutes || 0} mins
-    </p>
-  </div>
-        ))}
-      </div>
-    </div>
+    <AuthProvider>
+      <ThemeProvider theme={darkTheme}>
+        <CssBaseline />
+        <Router>
+          <Navbar />
+          <Routes>
+            <Route path="/" element={<RootRoute />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+            <Route path="/recommendations" element={<PrivateRoute><RecommendationsPage /></PrivateRoute>} />
+            <Route path="/visits" element={<PrivateRoute><VisitHistoryPage /></PrivateRoute>} />
+          </Routes>
+        </Router>
+      </ThemeProvider>
+    </AuthProvider>
   );
 }
 

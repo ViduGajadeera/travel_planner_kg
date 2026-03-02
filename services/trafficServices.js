@@ -1,4 +1,6 @@
-require("dotenv").config();
+const path = require("path");
+// always load the root .env file even if the script is started from a subdirectory
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 const axios = require("axios");
 
 const HERE_API_KEY = process.env.HERE_API_KEY;
@@ -16,6 +18,26 @@ if (!HERE_API_KEY) {
  * @returns {Object} - Traffic info including distance, duration, delay, and status
  */
 async function getTrafficInfo(originLat, originLon, destLat, destLon) {
+  // basic validation, avoid making request when coordinates are missing
+  if (
+    originLat == null || originLon == null ||
+    destLat == null   || destLon == null ||
+    isNaN(parseFloat(originLat)) || isNaN(parseFloat(originLon)) ||
+    isNaN(parseFloat(destLat))   || isNaN(parseFloat(destLon))
+  ) {
+    // invalid inputs; log and return unknown traffic
+    console.warn("getTrafficInfo called with invalid coordinates", {
+      originLat, originLon, destLat, destLon
+    });
+    return {
+      distanceKm: null,
+      baseDurationMinutes: null,
+      trafficDurationMinutes: null,
+      trafficDelayMinutes: null,
+      trafficStatus: "Unknown"
+    };
+  }
+
   try {
     const response = await axios.get(
       "https://router.hereapi.com/v8/routes",
@@ -37,17 +59,42 @@ async function getTrafficInfo(originLat, originLon, destLat, destLon) {
       throw new Error("No route found");
     }
 
-    const summary = response.data.routes[0].sections[0].summary;
+    const route = response.data.routes[0];
+    const sections = route.sections || [];
+    if (sections.length === 0) {
+      throw new Error("Route contains no sections");
+    }
 
-    const baseDuration = summary.baseDuration;       // seconds without traffic
-    const trafficDuration = summary.duration;        // seconds with traffic
-    const hasTraffic = trafficDuration > baseDuration;
+    // When a route is split into multiple sections the summary on the first
+    // section only describes that piece.  To get a stable distance/duration we
+    // must combine all of them; sometimes HERE returns different numbers when
+    // the road is broken into two or more parts and that was causing the
+    // values to “jump” each time.
+    let totalLength = 0;
+    let totalBaseDuration = 0;
+    let totalTrafficDuration = 0;
+
+    sections.forEach((s, idx) => {
+      const sum = s.summary;
+      totalLength += sum.length;
+      totalBaseDuration += sum.baseDuration;
+      totalTrafficDuration += sum.duration;
+      if (sections.length > 1) {
+        console.debug(`section ${idx + 1}/${sections.length}`, {
+          length: sum.length,
+          baseDuration: sum.baseDuration,
+          duration: sum.duration,
+        });
+      }
+    });
+
+    const hasTraffic = totalTrafficDuration > totalBaseDuration;
 
     return {
-      distanceKm: (summary.length / 1000).toFixed(2),
-      baseDurationMinutes: (baseDuration / 60).toFixed(2),
-      trafficDurationMinutes: (trafficDuration / 60).toFixed(2),
-      trafficDelayMinutes: ((trafficDuration - baseDuration) / 60).toFixed(2),
+      distanceKm: (totalLength / 1000).toFixed(2),
+      baseDurationMinutes: (totalBaseDuration / 60).toFixed(2),
+      trafficDurationMinutes: (totalTrafficDuration / 60).toFixed(2),
+      trafficDelayMinutes: ((totalTrafficDuration - totalBaseDuration) / 60).toFixed(2),
       trafficStatus: hasTraffic ? "Congested" : "Normal Flow"
     };
 

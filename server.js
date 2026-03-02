@@ -6,15 +6,17 @@ const createConstraints = require("./config/constraints");
 const userRoutes = require("./routes/userRoutes");
 const attractionRoutes = require("./routes/attractionRoutes");
 const recommendationRoutes = require("./routes/recommendationRoutes");
+const visitRoutes = require("./routes/visitRoutes");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-app.use("/users", userRoutes);
+app.use("/api/users", userRoutes); 
 app.use("/attractions", attractionRoutes);
 app.use("/api", recommendationRoutes);
+app.use("/visits", visitRoutes);
 
 app.get("/", (req, res) => {
   res.send("Dynamic Travel Knowledge Graph API Running");

@@ -1,12 +1,13 @@
-// controllers/recommendationController.js
 require("dotenv").config();
 const driver = require("../db/neo4j");
 const { getTrafficInfo } = require("../services/trafficServices");
+const { autoDetectVisit, calculateDistanceKm } = require("../services/visitService");
 const axios = require("axios");
 
 const HERE_API_KEY = process.env.HERE_API_KEY;
 const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY;
 
+// ------------------ Helper Functions ----------------
 async function fetchCityForPlace(placeName) {
   try {
     const res = await axios.get("https://geocode.search.hereapi.com/v1/geocode", {
@@ -30,7 +31,6 @@ async function fetchWeather(city, lat, lon) {
     } else {
       return "Unknown";
     }
-
     const res = await axios.get(url);
     return `${res.data.weather[0].main} (${res.data.main.temp.toFixed(1)}°C)`;
   } catch {
@@ -38,13 +38,16 @@ async function fetchWeather(city, lat, lon) {
   }
 }
 
+// Bad weather conditions to skip
+const BAD_WEATHER = ["Rain", "Thunderstorm", "Snow", "Extreme"];
+const HEAVY_TRAFFIC = ["Heavy traffic", "Traffic jam", "Congestion"];
+
+// ---------------- Recommendation API ----------------
 exports.getRecommendations = async (req, res) => {
   const { userId } = req.params;
-  // support passing coords via query (GET) or body (POST)
   let { originLat, originLon } = req.query;
   const { latitude, longitude } = req.body || {};
 
-  // fall back to body parameters if query not present
   if ((!originLat || !originLon) && latitude && longitude) {
     originLat = latitude;
     originLon = longitude;
@@ -54,17 +57,25 @@ exports.getRecommendations = async (req, res) => {
     return res.status(400).json({ error: "Origin latitude and longitude required" });
   }
 
+  originLat = parseFloat(originLat);
+  originLon = parseFloat(originLon);
+
+  // Auto-detect visits
+  await autoDetectVisit(userId, originLat, originLon);
+
   const session = driver.session();
 
   try {
-    // Get all attractions user likes
+    // ---------------- Skip attractions visited in last 3 months ----------------
     const result = await session.run(
       `
       MATCH (u:User {id: $userId})-[:LIKES]->(cat:Category)<-[:BELONGS_TO]-(a:Attraction)
-      RETURN a.name AS attraction, 
-             cat.name AS category, 
-             a.latitude AS lat, 
-             a.longitude AS lon
+      WHERE a.latitude IS NOT NULL AND a.longitude IS NOT NULL
+        AND NOT EXISTS {
+          MATCH (u)-[v:VISITED]->(a)
+          WHERE v.visitedAt >= datetime() - duration({months: 3})
+        }
+      RETURN a.name AS attraction, cat.name AS category, a.latitude AS lat, a.longitude AS lon
       `,
       { userId }
     );
@@ -76,77 +87,88 @@ exports.getRecommendations = async (req, res) => {
       lon: r.get("lon")
     }));
 
-    // Calculate distance for each attraction
+    // ---------------- Calculate distance + traffic ----------------
     for (let a of attractions) {
-      try {
-        const traffic = await getTrafficInfo(
-          originLat,
-          originLon,
-          a.lat,
-          a.lon
-        );
+      if (a.lat == null || a.lon == null) {
+        a.distanceKm = Infinity;
+        a.traffic = null;
+        continue;
+      }
 
-        a.distanceKm = parseFloat(traffic.distanceKm);
+      const straight = calculateDistanceKm(originLat, originLon, a.lat, a.lon);
+      try {
+        const traffic = await getTrafficInfo(originLat, originLon, a.lat, a.lon);
+        a.distanceKm = parseFloat(traffic.distanceKm) || Infinity;
         a.traffic = traffic;
       } catch {
         a.distanceKm = Infinity;
         a.traffic = null;
       }
+
+      a.straightDistanceKm = straight;
     }
 
-    // Sort by shortest distance
+    // Filter out attractions with heavy traffic
+    attractions = attractions.filter(a => !a.traffic || !HEAVY_TRAFFIC.includes(a.traffic.trafficStatus));
+
+    // Sort by nearest
     attractions.sort((a, b) => a.distanceKm - b.distanceKm);
 
-    // Select 5 from different categories
+    // ---------------- Two-stage selection ----------------
     const selected = [];
     const usedCategories = new Set();
+    const MAX_RECOMMENDATIONS = 9; // <-- updated to 8
 
+    // Stage 1: pick one per category
     for (let a of attractions) {
-      if (!usedCategories.has(a.category)) {
-        selected.push(a);
-        usedCategories.add(a.category);
-      }
-      if (selected.length === 5) break;
-    }
+      if (usedCategories.has(a.category)) continue;
 
-    // Enrich with city + weather
-    const recommendations = [];
-
-    for (let a of selected) {
       let city = null;
-
       const cityRes = await session.run(
-        `MATCH (a:Attraction {name:$attraction})-[:LOCATED_IN]->(c:City)
-         RETURN c.name AS city`,
+        `MATCH (a:Attraction {name:$attraction})-[:LOCATED_IN]->(c:City) RETURN c.name AS city`,
         { attraction: a.attraction }
       );
-
-      if (cityRes.records.length) {
-        city = cityRes.records[0].get("city");
-      } else {
-        city = await fetchCityForPlace(a.attraction);
-      }
+      city = cityRes.records.length ? cityRes.records[0].get("city") : await fetchCityForPlace(a.attraction);
 
       const weather = await fetchWeather(city, a.lat, a.lon);
 
-      recommendations.push({
-        attraction: a.attraction,
-        category: a.category,
-        city,
-        weather,
-        distanceKm: a.distanceKm,
-        traffic: a.traffic
-      });
+      if (BAD_WEATHER.some(w => weather.includes(w))) continue;
+
+      selected.push({ ...a, city, weather });
+      usedCategories.add(a.category);
+      if (selected.length === MAX_RECOMMENDATIONS) break;
     }
 
-    res.json({
+    // Stage 2: fill remaining slots by closest attractions
+    if (selected.length < MAX_RECOMMENDATIONS) {
+      for (let a of attractions) {
+        if (selected.find(s => s.attraction === a.attraction)) continue;
+
+        let city = null;
+        const cityRes = await session.run(
+          `MATCH (a:Attraction {name:$attraction})-[:LOCATED_IN]->(c:City) RETURN c.name AS city`,
+          { attraction: a.attraction }
+        );
+        city = cityRes.records.length ? cityRes.records[0].get("city") : await fetchCityForPlace(a.attraction);
+
+        const weather = await fetchWeather(city, a.lat, a.lon);
+
+        if (BAD_WEATHER.some(w => weather.includes(w))) continue;
+
+        selected.push({ ...a, city, weather });
+        if (selected.length === MAX_RECOMMENDATIONS) break;
+      }
+    }
+
+    return res.json({
       userId,
-      recommendations
+      origin: { originLat, originLon },
+      recommendations: selected
     });
 
   } catch (err) {
     console.error("Recommendation error:", err);
-    res.status(500).json({ error: "Failed to fetch recommendations" });
+    return res.status(500).json({ error: "Failed to fetch recommendations", details: err.message });
   } finally {
     await session.close();
   }
