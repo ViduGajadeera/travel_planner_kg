@@ -1,4 +1,6 @@
-require("dotenv").config();
+const path = require("path");
+// make sure .env from project root is loaded when running from \"scripts\" directory
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 const { getTrafficInfo } = require("../services/trafficServices");
 
 async function main() {
@@ -11,11 +13,11 @@ async function main() {
  // const destLon = 80.2168;
 
  // Colombo Fort → Maharagama
-const originLat = 6.9344;  // Colombo Fort
-const originLon = 79.8428;
+const originLat = 6.9394;  // Colombo Fort
+const originLon = 79.8476;
 
-const destLat = 6.8490;    // Maharagama
-const destLon = 79.9260;
+const destLat = 6.87143;    // Maharagama
+const destLon = 80.12106;
 
   try {
     const traffic = await getTrafficInfo(

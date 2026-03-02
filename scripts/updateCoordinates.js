@@ -1,16 +1,25 @@
-require("dotenv").config();
+const path = require("path");
+// ensure env variables are available even when script runs from scripts/ folder
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 const fs = require("fs");
 const csv = require("csv-parser");
 const driver = require("../db/neo4j"); // adjust path if needed
 
-const inputFile = "Unique_Locations_With_Coordinates.csv";
+// CSV is located in project root
+const inputFile = path.resolve(__dirname, "../SriLanka_Locations.csv");
 
 async function updateLocations() {
   const session = driver.session();
   const updates = [];
 
   // Read CSV and prepare updates
+  if (!fs.existsSync(inputFile)) {
+    console.error(`Input file not found: ${inputFile}`);
+    process.exit(1);
+  }
+
   fs.createReadStream(inputFile)
+    .on("error", (err) => { console.error("ReadStream error:", err); })
     .pipe(csv())
     .on("data", (row) => {
       const name = row.Location_Name?.trim();
